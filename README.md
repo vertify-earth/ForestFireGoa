@@ -1,15 +1,43 @@
 # ForestFireGoa
-Forest fire vulnerability and forest fire prediction using vegetation indices anomaly, surface temperature anomaly, meteorological parameters' anomaly in GEE.
 
-Summary of the methodology:
-1. We calculate decadal trends for vegetation and burn indices from landsat. We also calculate trends for other metereological parameters like rain, relative humudity, etc.
-2. We use these trend layers and true fire events over the same time range to map the vulnerability of the area.
-3. Then we use the trend layers to predict the most probable vulnerable areas. 
+**Forest fire vulnerability and prediction using vegetation indices anomaly, surface temperature anomaly, and meteorological parameters' anomaly in Google Earth Engine (GEE).**
 
-Sequence of execution:
+## Overview
+This project analyzes forest fire vulnerability and predicts potential fire-prone areas using long-term trends in vegetation indices, burn indices, and meteorological parameters. The methodology leverages Google Earth Engine (GEE) for data processing and analysis.
 
-1. Trendfire.js - pa_boundary is the only required input. 14 trend layers are generaed as output.
-2. FireVulnerability.js - Add trend layers (generated in the previous step), road, dem, fire13_19 and fire20_23 as inputs in the fireVulnerability.js
-3. TrendAnomalyPrediction.js - Add trend layers, fire13_19, fire20_23 and pa_boundary as inputs.
+## Methodology
+1. **Calculate Decadal Trends**  
+   - Generate long-term trends for vegetation and burn indices using Landsat imagery.
+   - Compute trends for meteorological parameters such as rainfall and relative humidity.
+2. **Fire Vulnerability Mapping**  
+   - Use historical fire events and trend layers to assess vulnerability.
+   - Identify areas most susceptible to fires.
+3. **Fire Prediction**  
+   - Utilize trend layers to predict high-risk fire zones.
+
+## Execution Sequence
+### 1. Trend Calculation (`Trendfire.js`)
+   - **Input:** `pa_boundary`
+   - **Output:** 14 trend layers representing long-term changes in vegetation, burn indices, and meteorological parameters.
+
+### 2. Fire Vulnerability Mapping (`FireVulnerability.js`)
+   - **Inputs:**
+     - Trend layers (from previous step)
+     - Roads
+     - DEM (Digital Elevation Model)
+     - Fire event datasets (`fire13_19` and `fire20_23`)
+   - **Output:**
+     - Fire risk classification map (Low/High fire risk) at 30m resolution
+     - Kappa coefficient for accuracy assessment
+
+### 3. Fire Prediction (`TrendAnomalyPrediction.js`)
+   - **Inputs:**
+     - Trend layers
+     - Fire event datasets (`fire13_19`, `fire20_23`)
+     - `pa_boundary`
+   - **Output:**
+     - Anomaly map comparing trend layers with current conditions
+
+This workflow enables proactive fire risk management by identifying vulnerable areas based on historical patterns and predictive modeling.
 
 
