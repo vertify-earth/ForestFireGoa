@@ -13,7 +13,7 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
    - Use historical fire events and trend layers to assess vulnerability.
    - Identify areas most susceptible to fires.
 3. **Fire Prediction**  
-   - Utilize trend layers to predict high-risk fire zones.
+   - Utilize trend layers to predict high-risk fire zones in the near future.
 
 ## Execution Sequence
 ### 1. Trend Calculation (`Trendfire.js`)
