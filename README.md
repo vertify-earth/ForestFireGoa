@@ -18,11 +18,11 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
 ## Execution Sequence
 ### 1. Trend Calculation (`Trendfire.js`)
    - **Input:** `pa_boundary`
-   - **Output:** 14 trend layers representing long-term changes in vegetation, burn indices, and meteorological parameters.
+   - **Output:** 14 trend layers representing long-term changes in vegetation, burn indices, and meteorological parameters - download the trend layer from here - https://www.dropbox.com/scl/fi/ena1qfeqv5ppshluop8kt/inputResampled.tif?rlkey=arefwl3my7nx3z5qpknu88lsx&st=vj8cn3bd&dl=0
 
 ### 2. Fire Vulnerability Mapping (`FireVulnerability.js`)
    - **Inputs:**
-     - Trend layers (from previous step)
+     - Trend layers - https://www.dropbox.com/scl/fi/ena1qfeqv5ppshluop8kt/inputResampled.tif?rlkey=arefwl3my7nx3z5qpknu88lsx&st=vj8cn3bd&dl=0
      - Roads
      - DEM (Digital Elevation Model)
      - Fire event datasets (`fire13_19` and `fire20_23`)
@@ -32,7 +32,7 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
 
 ### 3. Fire Prediction (`TrendAnomalyPrediction.js`)
    - **Inputs:**
-     - Trend layers
+     - Trend layers - https://www.dropbox.com/scl/fi/ena1qfeqv5ppshluop8kt/inputResampled.tif?rlkey=arefwl3my7nx3z5qpknu88lsx&st=vj8cn3bd&dl=0
      - Fire event datasets (`fire13_19`, `fire20_23`)
      - `pa_boundary`
    - **Output:**
