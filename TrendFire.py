@@ -120,26 +120,23 @@ def get_goa_boundary():
 def maskL8sr(image):
     """
     Mask clouds and scale pixel values for Landsat 8 SR imagery.
+    Matches the JavaScript implementation.
     """
-    # Get QA band
-    qa = image.select('QA_PIXEL')
-    
-    # Bits 3 and 5 are cloud shadow and cloud, respectively
-    cloud_shadow_bit_mask = 1 << 3
-    clouds_bit_mask = 1 << 5
-    
-    # Both flags should be set to zero, indicating clear conditions
-    mask = qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0).And(
-           qa.bitwiseAnd(clouds_bit_mask).eq(0))
-    
+    # Bits 0-4 are Fill, Dilated Cloud, Cirrus, Cloud, Cloud Shadow.
+    qaMask = image.select('QA_PIXEL').bitwiseAnd(int('11111', 2)).eq(0)
+    saturationMask = image.select('QA_RADSAT').eq(0)
+
     # Scale the optical bands
     optical_bands = image.select('SR_B.').multiply(0.0000275).add(-0.2)
-    
+
     # Scale the thermal bands
     thermal_bands = image.select('ST_B.*').multiply(0.00341802).add(149.0)
-    
-    # Return the masked and scaled image
-    return image.select(['QA_.*']).addBands(optical_bands).addBands(thermal_bands).updateMask(mask)
+
+    # Return the masked and scaled image, applying both masks
+    return image.addBands(optical_bands, None, True) \
+              .addBands(thermal_bands, None, True) \
+              .updateMask(qaMask) \
+              .updateMask(saturationMask)
 
 # Function to calculate spectral indices and add them as bands
 def addIndices(image):
@@ -180,8 +177,8 @@ def addIndices(image):
     # NDMI (Normalized Difference Moisture Index)
     ndmi = image.normalizedDifference(['SR_B5', 'SR_B6']).rename('ndmi')
     
-    # NDFI (Normalized Difference Fraction Index)
-    ndfi = image.normalizedDifference(['SR_B7', 'SR_B5']).rename('ndfi')
+    # NDFI (Normalized Difference Fraction Index) - Corrected formula
+    ndfi = image.normalizedDifference(['ST_B10', 'SR_B6']).rename('ndfi')
     
     # NBR (Normalized Burn Ratio)
     nbr = image.normalizedDifference(['SR_B5', 'SR_B7']).rename('nbr')
@@ -240,12 +237,19 @@ def process_landsat_trends(goa, start_date='2013-03-20', end_date='2023-02-28'):
     """
     print("Processing Landsat 8 data and calculating trends...")
     
+    # Define the outlier date
+    outlier_date = ee.Date('2016-06-22')
+    
     # Load Landsat 8 collection and filter by date and location
     ls8_collection = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
         .filterDate(start_date, end_date) \
         .filterBounds(goa) \
         .filterMetadata('CLOUD_COVER', 'less_than', 10) \
         .map(maskL8sr) \
+        .filter(ee.Filter.Or(  # Add outlier filter
+            ee.Filter.date(start_date, outlier_date),
+            ee.Filter.date(outlier_date.advance(1, 'day'), end_date)
+        )) \
         .map(lambda image: image.clip(goa)) \
         .map(addIndices)
     
@@ -565,18 +569,30 @@ def main():
     print("\nMerging all trend layers...")
     all_trends = landsat_trends.addBands(rain_trends).addBands(sm_trends).addBands(rh_trends)
     
-    # Export the merged trends
-    print("Exporting merged trends...")
+    # Export the merged trends to Asset
+    print("Exporting merged trends to GEE Asset...")
     export_to_asset(
         all_trends,
         'users/jonasnothnagel/Trend2024_all_new',
         goa,
-        'All_Trends_2024',
+        'All_Trends_2024_Asset', # Changed description slightly for clarity
+        scale=30
+    )
+
+    # Export the merged trends to Google Drive
+    print("Exporting merged trends to Google Drive...")
+    export_to_drive(
+        all_trends,
+        'TrendFirePy_output', # Filename for Drive export
+        goa,
+        'All_Trends_2024_Drive', # Description for Drive task
+        folder='GEE_Exports',      # Google Drive folder name
         scale=30
     )
     
     print("\nAnalysis completed successfully!")
-    print("Results exported to Earth Engine assets")
+    print("Results export tasks started for Earth Engine assets and Google Drive.")
+    print("Monitor task status in the GEE Code Editor or using task monitoring tools.")
     
     return {
         'trends': all_trends,

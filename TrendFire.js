@@ -3,6 +3,7 @@
 // The required input is - 'region of interest' geometry
 
 // the goa object here is not defined? JN
+// var goa = ee.FeatureCollection('users/jonasnothnagel/pa_boundary');
 Map.centerObject(goa,8)
 
 //Mask to filter clouds and to scale the DN values to surface reflectance
