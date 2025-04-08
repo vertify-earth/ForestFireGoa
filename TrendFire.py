@@ -487,41 +487,51 @@ def merge_trend_layers(ls_trends, rain_trend, sm_trend, rh_trend):
     return all_trends
 
 # Function to export the trends to Google Earth Engine assets
-def export_to_asset(image, asset_name, region, description=None, scale=30):
+def export_to_asset(image, asset_name, region, description=None, scale=30, export_bounds=None):
     """
     Export an image to a Google Earth Engine asset.
+    Allows specifying explicit export bounds.
     """
     if description is None:
         description = asset_name.split('/')[-1]
     
+    # Use provided bounds if available, otherwise use the region geometry's bounds
+    export_region = export_bounds if export_bounds else region
+
     task = ee.batch.Export.image.toAsset(
-        image=image,
+        image=image, # Image should be pre-projected and cast
         description=description,
         assetId=asset_name,
-        region=region,
+        region=export_region,
         scale=scale,
+        crs='EPSG:3857',       
         maxPixels=1e13
     )
     
     task.start()
-    print(f"Started export task: {description}")
+    print(f"Started export task to Asset: {description}")
     return task
 
 # Function to export the trends to Google Drive
-def export_to_drive(image, filename, region, description=None, folder='GEE_Exports', scale=30):
+def export_to_drive(image, filename, region, description=None, folder='GEE_Exports', scale=30, export_bounds=None):
     """
     Export an image to Google Drive.
+    Allows specifying explicit export bounds.
     """
     if description is None:
         description = filename
+        
+    # Use provided bounds if available, otherwise use the region geometry's bounds
+    export_region = export_bounds if export_bounds else region
     
     task = ee.batch.Export.image.toDrive(
-        image=image,
+        image=image, # Image should be pre-projected and cast
         description=description,
         folder=folder,
         fileNamePrefix=filename,
-        region=region,
+        region=export_region,
         scale=scale,
+        crs='EPSG:3857',       
         maxPixels=1e13
     )
     
@@ -569,25 +579,43 @@ def main():
     print("\nMerging all trend layers...")
     all_trends = landsat_trends.addBands(rain_trends).addBands(sm_trends).addBands(rh_trends)
     
+    # --- Define Target Export Bounds (from inputResampled.tif in EPSG:3857) ---
+    target_bounds_coords = [
+        [8246820.0, 1680600.0], # bottom-left (x, y)
+        [8275140.0, 1680600.0], # bottom-right (x, y)
+        [8275140.0, 1767960.0], # top-right (x, y)
+        [8246820.0, 1767960.0], # top-left (x, y)
+        [8246820.0, 1680600.0]  # close the loop
+    ]
+    target_export_region = ee.Geometry.Polygon(target_bounds_coords, proj='EPSG:3857', evenOdd=False)
+
+    # --- Explicitly set data type and CRS before export ---
+    # Note: Reprojection happens here, but export uses target_export_region for extent
+    print("Casting to float32 and reprojecting to EPSG:3857...")
+    all_trends_export = all_trends.toFloat() \
+                                 .reproject(crs='EPSG:3857', scale=30)
+    
     # Export the merged trends to Asset
     print("Exporting merged trends to GEE Asset...")
     export_to_asset(
-        all_trends,
+        all_trends_export, 
         'users/jonasnothnagel/Trend2024_all_new',
-        goa,
-        'All_Trends_2024_Asset', # Changed description slightly for clarity
-        scale=30
+        goa, # Original region used for clipping/processing
+        description='All_Trends_2024_Asset', 
+        scale=30,
+        export_bounds=target_export_region # Pass the explicit bounds
     )
 
     # Export the merged trends to Google Drive
     print("Exporting merged trends to Google Drive...")
     export_to_drive(
-        all_trends,
-        'TrendFirePy_output', # Filename for Drive export
-        goa,
-        'All_Trends_2024_Drive', # Description for Drive task
-        folder='GEE_Exports',      # Google Drive folder name
-        scale=30
+        all_trends_export, 
+        'TrendFirePy_output', 
+        goa, # Original region used for clipping/processing
+        description='All_Trends_2024_Drive', 
+        folder='GEE_Exports',      
+        scale=30,
+        export_bounds=target_export_region # Pass the explicit bounds
     )
     
     print("\nAnalysis completed successfully!")
