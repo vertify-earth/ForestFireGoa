@@ -2,150 +2,156 @@
 # -*- coding: utf-8 -*-
 
 """
-TrendAnomalyPrediction.py: Python implementation of TrendAnomalyPrediction.js using Earth Engine Python API.
-This script calculates anomalies between current conditions and predicted values from historical trends
-to identify potential fire hotspots in Goa, India.
+TrendAnomalyPrediction.py: Calculates trend anomalies based on long-term trends and recent observations.
 
-The script performs the following steps:
-1. Processes current Landsat imagery to calculate various spectral indices
-2. Uses trend coefficients to predict expected values based on historical data
-3. Calculates anomalies between current and predicted values
-4. Identifies hotspots based on anomalies in rainfall, RH, soil moisture, and vegetation indices
-5. Integrates land use/land cover data to identify vulnerable areas
-6. Exports hotspot maps to Google Drive and/or Earth Engine assets
-
-Equivalent to the TrendAnomalyPrediction.js script in the original implementation.
+This script replicates the core logic of TrendAnomalyPrediction.js:
+1. Loads pre-calculated trend layers (output from TrendFire.py).
+2. Calculates predicted values for a target period (e.g., Feb 2023) based on trends.
+3. Calculates actual observed values for the target period using Landsat, ERA5, SMAP, CHIRPS.
+4. Computes the anomaly by subtracting predicted values from observed values.
+5. Exports the resulting anomaly image.
 """
 
 import ee
 import os
 import datetime
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 import geopandas as gpd
-from tqdm import tqdm
+from shapely.geometry import Polygon
 
-# Initialize the Earth Engine API
-try:
-    ee.Initialize()
-    print("Earth Engine API initialized successfully.")
-except Exception as e:
-    print(f"Error initializing Earth Engine API: {e}")
-    print("Make sure you have authenticated with Earth Engine using ee.Authenticate()")
+# ==============================================================================
+# Helper Functions (Adapted from TrendFire.py)
+# ==============================================================================
+
+def initialize_ee():
+    """Initializes the Earth Engine API."""
+    try:
+        # Check if already initialized
+        try:
+            ee.ImageCollection('NASA/SMAP/SPL3SMP_E/005').limit(1).size().getInfo()
+            print("Earth Engine API already initialized.")
+            return True
+        except ee.EEException as e:
+             # If not initialized, attempt authentication and initialization
+            if "cannot be used before ee.Initialize()" in str(e) or \
+               "Earth Engine account" in str(e) or \
+               "Credentials are not valid" in str(e):
+                try:
+                   ee.Authenticate(quiet=True) # Use quiet=True for non-interactive
+                   ee.Initialize()
+                   print("Earth Engine API initialized successfully.")
+                   return True
+                except Exception as init_e:
+                    print(f"Error initializing Earth Engine API: {init_e}")
+                    print("Please ensure you have authenticated with GEE CLI: 'earthengine authenticate'")
+                    return False
+            else:
+                # Handle other EE exceptions if needed
+                 print(f"An Earth Engine error occurred: {e}")
+                 return False
+
+    except Exception as e:
+        print(f"An unexpected error occurred during EE initialization: {e}")
+        return False
+
+
+# Function to debug the shapefile (Optional but good practice)
+def debug_shapefile(boundary_path):
+    """
+    Debug function to check shapefile contents and geometry validity.
+    """
+    try:
+        print("\nDebugging shapefile...")
+        gdf = gpd.read_file(boundary_path)
+        print(f"\nShapefile contains {len(gdf)} features")
+        print("\nFirst few rows of the data:")
+        print(gdf.head())
+        print("\nGeometry type:", gdf.geometry.type.unique())
+        print("\nCRS:", gdf.crs)
+
+        # Check if geometries are valid
+        invalid_geoms = gdf[~gdf.geometry.is_valid]
+        if len(invalid_geoms) > 0:
+            print("\nWarning: Found invalid geometries!")
+            print("Number of invalid geometries:", len(invalid_geoms))
+            print("\nInvalid geometries:")
+            print(invalid_geoms)
+
+        return gdf
+    except Exception as e:
+        print(f"Error debugging shapefile: {e}")
+        return None
 
 # Define the Goa study area boundary
-def get_study_boundary():
+def get_goa_boundary(shp_path=os.path.join('data', 'pa_boundary.shp')):
     """
-    Get the study area boundary for Goa, India.
-    Returns an ee.Geometry.
+    Get the boundary of the study area from a shapefile.
+    Returns an ee.Geometry object.
     """
-    # Method 1: Load from a shapefile if available locally
     try:
-        boundary_path = os.path.join('data', 'pa_boundary.shp')
-        if os.path.exists(boundary_path):
-            boundary_gdf = gpd.read_file(boundary_path)
-            # Convert to GeoJSON
-            boundary_geojson = boundary_gdf.geometry.__geo_interface__
-            # Create an EE geometry
-            return ee.Geometry.Polygon(boundary_geojson['features'][0]['geometry']['coordinates'])
-    except Exception as e:
-        print(f"Could not load boundary from shapefile: {e}")
-    
-    # Method 2: Use predefined feature from Earth Engine
-    try:
-        # Get the Goa district boundary from Earth Engine's administrative boundaries
-        goa = ee.FeatureCollection("FAO/GAUL/2015/level1").filter(ee.Filter.eq('ADM1_NAME', 'Goa'))
-        return goa.geometry()
-    except Exception as e:
-        print(f"Could not load boundary from Earth Engine: {e}")
-        
-    # Method 3: Define manually as fallback
-    # These coordinates would need to be adjusted to match the study area
-    goa_coords = [
-        [73.6765, 15.7560],
-        [74.3161, 15.7560],
-        [74.3161, 14.8922],
-        [73.6765, 14.8922],
-        [73.6765, 15.7560]
-    ]
-    return ee.Geometry.Polygon(goa_coords)
+        if os.path.exists(shp_path):
+            print(f"Loading study area boundary from {shp_path}...")
+            gdf = gpd.read_file(shp_path) # Removed debug call for cleaner flow
 
-# Function to load fire events data
-def load_fire_events(pa):
-    """
-    Load fire events data from 2013-2023 and merge into a single feature collection.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-    
-    Returns:
-        ee.FeatureCollection of fire events
-    """
-    print("Loading fire events data...")
-    
-    # Load fire events data (2013-2019)
-    try:
-        # If the data is available in Earth Engine, you can load it directly
-        fire_13_19 = ee.FeatureCollection("users/your_username/fire13_19")
-    except:
-        # Otherwise, try to find and upload it, or use a placeholder
-        print("Fire data 2013-2019 not available in Earth Engine. Using placeholder.")
-        fire_13_19 = ee.FeatureCollection([])
-    
-    # Load fire events data (2020-2023)
-    try:
-        # If the data is available in Earth Engine, you can load it directly
-        fire_20_23 = ee.FeatureCollection("users/your_username/fire20_23")
-    except:
-        # Otherwise, try to find and upload it, or use a placeholder
-        print("Fire data 2020-2023 not available in Earth Engine. Using placeholder.")
-        fire_20_23 = ee.FeatureCollection([])
-    
-    # Merge the two collections
-    fire_all = fire_13_19.merge(fire_20_23)
-    
-    # Filter by the study area boundary
-    fire_all = fire_all.filterBounds(pa)
-    
-    # Add a 'year' property based on the acquisition date
-    def add_year(feature):
-        acq_date = ee.String(feature.get('ACQ_DATE'))
-        year = ee.Number.parse(acq_date.slice(0, 4))
-        return feature.set('year', year)
-    
-    fire_all = fire_all.map(add_year)
-    
-    # Count the number of fire points
-    fire_count = fire_all.size().getInfo()
-    print(f"Number of fire events in the study area: {fire_count}")
-    
-    return fire_all
+            if len(gdf) == 0:
+                print("Error: Shapefile contains no features")
+                return None
 
-# Function to mask clouds in Landsat 8/9 imagery
+            # Reproject to EPSG:4326 if necessary for GEE Geometry conversion
+            if gdf.crs and gdf.crs.to_epsg() != 4326:
+                 print(f"Reprojecting boundary from {gdf.crs} to EPSG:4326...")
+                 gdf = gdf.to_crs(epsg=4326)
+
+            geometry = gdf.geometry.iloc[0]
+
+            if not geometry.is_valid:
+                 print("Warning: Attempting to fix invalid geometry...")
+                 geometry = geometry.buffer(0) # Common trick to fix minor issues
+                 if not geometry.is_valid:
+                     print("Error: Geometry is invalid and could not be fixed.")
+                     return None
+
+            # Convert 3D polygon to 2D if needed
+            if geometry.has_z:
+                print("Converting 3D polygon to 2D...")
+                coords = list(geometry.exterior.coords)
+                coords_2d = [(x, y) for x, y, z in coords]
+                geometry = Polygon(coords_2d)
+
+            # Convert to GeoJSON format suitable for EE
+            gdf.geometry = gpd.GeoSeries([geometry]) # Ensure only the valid geometry is used
+            boundary_geojson = gdf.__geo_interface__
+
+            # Extract coordinates for EE Geometry Polygon
+            ee_coords = boundary_geojson['features'][0]['geometry']['coordinates']
+            return ee.Geometry.Polygon(ee_coords)
+        else:
+            print(f"Error: Could not find boundary shapefile at {shp_path}")
+            return None
+    except Exception as e:
+        print(f"Error loading boundary from shapefile: {e}")
+        return None
+
+# Function to mask clouds in Landsat 8 imagery
 def maskL8sr(image):
     """
-    Mask clouds and scale pixel values for Landsat 8/9 SR imagery.
+    Mask clouds and scale pixel values for Landsat 8 SR imagery.
+    Matches the JavaScript implementation.
     """
-    # Get QA band
-    qa = image.select('QA_PIXEL')
-    
-    # Bits 3 and 5 are cloud shadow and cloud, respectively
-    cloud_shadow_bit_mask = 1 << 3
-    clouds_bit_mask = 1 << 5
-    
-    # Both flags should be set to zero, indicating clear conditions
-    mask = qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0).And(
-           qa.bitwiseAnd(clouds_bit_mask).eq(0))
-    
+    # Bits 0-4 are Fill, Dilated Cloud, Cirrus, Cloud, Cloud Shadow.
+    qaMask = image.select('QA_PIXEL').bitwiseAnd(int('11111', 2)).eq(0)
+    saturationMask = image.select('QA_RADSAT').eq(0)
+
     # Scale the optical bands
     optical_bands = image.select('SR_B.').multiply(0.0000275).add(-0.2)
-    
+
     # Scale the thermal bands
     thermal_bands = image.select('ST_B.*').multiply(0.00341802).add(149.0)
-    
-    # Return the masked and scaled image
-    return image.select(['QA_.*']).addBands(optical_bands).addBands(thermal_bands).updateMask(mask)
+
+    # Return the masked and scaled image, applying both masks
+    return image.addBands(optical_bands, None, True) \
+              .addBands(thermal_bands, None, True) \
+              .updateMask(qaMask) \
+              .updateMask(saturationMask)
 
 # Function to calculate spectral indices and add them as bands
 def addIndices(image):
@@ -154,7 +160,7 @@ def addIndices(image):
     """
     # NDVI (Normalized Difference Vegetation Index)
     ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('ndvi')
-    
+
     # EVI (Enhanced Vegetation Index)
     evi = image.expression(
         '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))',
@@ -164,7 +170,7 @@ def addIndices(image):
             'BLUE': image.select('SR_B2')
         }
     ).rename('evi')
-    
+
     # MSAVI (Modified Soil Adjusted Vegetation Index)
     msavi = image.expression(
         '(2 * NIR + 1 - sqrt((2 * NIR + 1) * (2 * NIR + 1) - 8 * (NIR - RED))) / 2',
@@ -173,7 +179,7 @@ def addIndices(image):
             'RED': image.select('SR_B4')
         }
     ).rename('msavi')
-    
+
     # MIRBI (Mid-Infrared Burn Index)
     mirbi = image.expression(
         '10 * SWIR2 - 9.8 * SWIR1 + 2',
@@ -182,19 +188,19 @@ def addIndices(image):
             'SWIR2': image.select('SR_B7')
         }
     ).rename('mirbi')
-    
+
     # NDMI (Normalized Difference Moisture Index)
     ndmi = image.normalizedDifference(['SR_B5', 'SR_B6']).rename('ndmi')
-    
-    # NDFI (Normalized Difference Fraction Index)
-    ndfi = image.normalizedDifference(['SR_B7', 'SR_B5']).rename('ndfi')
-    
+
+    # NDFI (Normalized Difference Fraction Index) - Uses ST_B10 and SR_B6 like JS
+    ndfi = image.normalizedDifference(['ST_B10', 'SR_B6']).rename('ndfi')
+
     # NBR (Normalized Burn Ratio)
     nbr = image.normalizedDifference(['SR_B5', 'SR_B7']).rename('nbr')
-    
+
     # NBR2 (Normalized Burn Ratio 2)
     nbr2 = image.normalizedDifference(['SR_B6', 'SR_B7']).rename('nbr2')
-    
+
     # BSI (Bare Soil Index)
     bsi = image.expression(
         '((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))',
@@ -205,502 +211,285 @@ def addIndices(image):
             'BLUE': image.select('SR_B2')
         }
     ).rename('bsi')
-    
+
     # Add all indices as bands
     return image.addBands([ndvi, evi, msavi, mirbi, ndmi, ndfi, nbr, nbr2, bsi])
 
-# Function to calculate SMI (Soil Moisture Index)
-def calculateSMI(image):
-    """
-    Calculate Soil Moisture Index (SMI) from Landsat data.
-    """
-    Ts = image.select('ST_B10')
-    ndvi = image.select('ndvi')
-    
-    # Apply the SMI calculation
-    smi = image.expression(
-        '(Ts_max - Ts) / (Ts_max - Ts_min)',
-        {
-            'Ts': Ts,
-            'Ts_max': Ts.reduceRegion(
-                reducer=ee.Reducer.max(),
-                geometry=image.geometry(),
-                scale=30,
-                maxPixels=1e9
-            ).get('ST_B10'),
-            'Ts_min': Ts.reduceRegion(
-                reducer=ee.Reducer.min(),
-                geometry=image.geometry(),
-                scale=30,
-                maxPixels=1e9
-            ).get('ST_B10')
-        }
-    ).rename('smi')
-    
+
+# Function to calculate SMI using SWIR bands (requires pre-calculated min/max)
+def addSMI_local(image, swir_min, swir_max):
+    """Calculates SMI, requires swir min/max for the specific collection."""
+    smi = image.select('SR_B7').subtract(swir_min) \
+        .divide(swir_max.subtract(swir_min)) \
+        .multiply(-1).add(1).rename('smi')
     return image.addBands(smi)
 
-# Function to get current Landsat data
-def get_current_landsat(pa, date_range):
-    """
-    Get the most recent Landsat 8/9 imagery for a specified date range.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-        date_range: Dictionary with 'start' and 'end' dates
-    
-    Returns:
-        ee.Image with all spectral indices and bands
-    """
-    print(f"Getting current Landsat data for {date_range['start']} to {date_range['end']}...")
-    
-    # Load Landsat collection and filter by date and location
-    ls_collection = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
-        .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')) \
-        .filterDate(date_range['start'], date_range['end']) \
-        .filterBounds(pa) \
-        .filter(ee.Filter.lt('CLOUD_COVER', 20))
-    
-    # Apply cloud masking
-    ls_masked = ls_collection.map(maskL8sr)
-    
-    # Add indices to all images in collection
-    ls_indices = ls_masked.map(addIndices)
-    
-    # Calculate SMI for each image
-    ls_with_smi = ls_indices.map(calculateSMI)
-    
-    # Create mosaic of the collection
-    current_ls = ls_with_smi.mosaic().clip(pa)
-    
-    return current_ls
+# Function to calculate vapor pressure (for RH calculation)
+def calcVaporPressure(temp_k):
+    """ Calculates vapor pressure from temperature in Kelvin using Clausius-Clapeyron approx. """
+    # Convert Kelvin to Celsius for the formula
+    temp_c = temp_k.subtract(273.15)
+    # Formula parameters from the JS script (note 19.67, standard is often 17.67)
+    # Ensure calculations are done per pixel
+    denom = temp_c.add(243.5)
+    num = temp_c.multiply(19.67)
+    exponent = num.divide(denom).exp() # e^(...)
+    return exponent.multiply(6.112) #Multiply by saturation vapor pressure at 0°C (in hPa or mbar)
 
-# Function to calculate vapor pressure from temperature
-def calcVaporPressure(temp):
+# Function to export trends to Google Drive
+def export_to_drive(image, filename, region, description=None, folder='GEE_Exports_Anomaly', scale=30, export_bounds=None):
     """
-    Calculate vapor pressure from temperature using the Clausius-Clapeyron equation.
-    
-    Args:
-        temp: ee.Image with temperature in Celsius
-    
-    Returns:
-        ee.Image with vapor pressure (hPa)
+    Export an image to Google Drive.
+    Assumes image is already cast and projected if needed.
+    Uses explicit export bounds if provided.
     """
-    denom = temp.add(243.5)
-    num = temp.multiply(17.67)
-    exponent = num.divide(denom).exp()
-    return exponent.multiply(6.112)
+    if description is None:
+        description = filename
 
-# Function to get current ERA5 relative humidity data
-def get_current_relative_humidity(pa, date_range):
-    """
-    Get the most recent ERA5 relative humidity data.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-        date_range: Dictionary with 'start' and 'end' dates
-    
-    Returns:
-        ee.Image with relative humidity
-    """
-    print(f"Getting current relative humidity data for {date_range['start']} to {date_range['end']}...")
-    
-    # Load ERA5 data
-    era5 = ee.ImageCollection('ECMWF/ERA5/DAILY') \
-        .filterDate(date_range['start'], date_range['end']) \
-        .filterBounds(pa) \
-        .select(['dewpoint_temperature_2m', 'temperature_2m'])
-    
-    # Calculate relative humidity
-    def calculateRH(image):
-        dewPoint = image.select('dewpoint_temperature_2m')
-        temperature = image.select('temperature_2m')
-        
-        # Calculate vapor pressures
-        eT = calcVaporPressure(temperature)
-        eTd = calcVaporPressure(dewPoint)
-        
-        # Compute relative humidity (%)
-        RH = eTd.divide(eT).multiply(100).rename('rh')
-        
-        # Add time property
-        return RH.set('system:time_start', image.get('system:time_start'))
-    
-    # Apply RH calculation to the collection
-    rh_collection = era5.map(calculateRH)
-    
-    # Create mosaic of the collection
-    current_rh = rh_collection.mosaic().clip(pa)
-    
-    return current_rh
+    export_region = export_bounds if export_bounds else region
 
-# Function to get current SMAP soil moisture data
-def get_current_soil_moisture(pa, date_range):
-    """
-    Get the most recent SMAP soil moisture data.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-        date_range: Dictionary with 'start' and 'end' dates
-    
-    Returns:
-        ee.Image with soil moisture
-    """
-    print(f"Getting current soil moisture data for {date_range['start']} to {date_range['end']}...")
-    
-    # Load SMAP data
-    smap = ee.ImageCollection('NASA/SMAP/SPL3SMP_E/005') \
-        .filterDate(date_range['start'], date_range['end']) \
-        .filterBounds(pa) \
-        .select(['soil_moisture_am'])
-    
-    # Create mosaic of the collection
-    current_sm = smap.mosaic().clip(pa).rename('sm')
-    
-    return current_sm
+    print(f"Starting export task to Drive: {description}")
+    task = ee.batch.Export.image.toDrive(
+        image=image, # Assume image is pre-processed (float32, projected)
+        description=description,
+        folder=folder,
+        fileNamePrefix=filename,
+        region=export_region.getInfo()['coordinates'], # Pass coordinates explicitly
+        scale=scale,
+        crs='EPSG:3857', # Ensure CRS matches previous step
+        maxPixels=1e13
+    )
+    task.start()
+    print(f"Task started (id: {task.id}). Check GEE Tasks or use monitoring tools.")
+    return task
 
-# Function to get current CHIRPS precipitation data
-def get_current_precipitation(pa, date_range):
-    """
-    Get the most recent CHIRPS precipitation data.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-        date_range: Dictionary with 'start' and 'end' dates
-    
-    Returns:
-        ee.Image with precipitation
-    """
-    print(f"Getting current precipitation data for {date_range['start']} to {date_range['end']}...")
-    
-    # Load CHIRPS data
-    chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY') \
-        .filterDate(date_range['start'], date_range['end']) \
-        .filterBounds(pa)
-    
-    # Create sum of the collection
-    current_rain = chirps.sum().clip(pa).rename('rain')
-    
-    return current_rain
+# ==============================================================================
+# Main Script Logic
+# ==============================================================================
 
-# Function to load trend coefficients from the TrendFire output
-def load_trend_coefficients(pa):
-    """
-    Load trend coefficients previously calculated using TrendFire.py.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-    
-    Returns:
-        ee.Image with all trend coefficients
-    """
-    print("Loading trend coefficients...")
-    
-    try:
-        # Try to load the trend layers from Earth Engine assets
-        trends = ee.Image("users/your_username/goa_fire_trends").clip(pa)
-        print("Successfully loaded trend coefficients from Earth Engine asset.")
-        return trends
-    except:
-        print("Trend coefficients not found in Earth Engine assets. Using placeholder.")
-        # Create a placeholder image with zeros for all bands
-        # This should be replaced with actual trend calculations
-        placeholder = ee.Image(0).rename('ndvi_trend')
-        return placeholder
-
-# Function to predict index values based on trend coefficients
-def predict_from_trends(trend_coefficients, current_time, reference_time):
-    """
-    Predict index values for the current time based on historical trends.
-    
-    Args:
-        trend_coefficients: ee.Image with trend coefficients
-        current_time: Current time in decimal years since start
-        reference_time: Reference time in decimal years for the intercept
-    
-    Returns:
-        ee.Image with predicted values
-    """
-    print("Predicting index values from trend coefficients...")
-    
-    # Construct regression expressions
-    # Predicted value = intercept + slope * (current_time - reference_time)
-    time_diff = ee.Number(current_time).subtract(reference_time)
-    
-    # Create prediction expressions for each index
-    indices = [
-        'ndvi', 'evi', 'msavi', 'mirbi', 'ndmi', 'ndfi', 
-        'nbr', 'nbr2', 'bsi', 'smi', 'ST_B10', 'rain', 'rh', 'sm'
-    ]
-    
-    predicted_indices = ee.Image.constant(0)
-    
-    for index in indices:
-        # Try to get trend coefficient for this index
-        try:
-            trend = trend_coefficients.select(f'{index}_trend')
-            
-            # Calculate predicted value
-            # Here we're assuming the intercept is the current average value
-            # This is a simplification - in a full implementation we'd have both slope and intercept
-            predicted = trend.multiply(time_diff).rename(index)
-            
-            # Add to the predicted indices image
-            predicted_indices = predicted_indices.addBands(predicted)
-        except:
-            print(f"Warning: Could not find trend coefficient for {index}")
-    
-    return predicted_indices
-
-# Function to calculate anomalies between current and predicted values
-def calculate_anomalies(current, predicted):
-    """
-    Calculate anomalies between current observations and predicted values.
-    
-    Args:
-        current: ee.Image with current observations
-        predicted: ee.Image with predicted values
-    
-    Returns:
-        ee.Image with anomalies for each band
-    """
-    print("Calculating anomalies...")
-    
-    # Calculate anomalies (current - predicted)
-    anomaly_image = current.subtract(predicted)
-    
-    # Rename bands to indicate they are anomalies
-    band_names = anomaly_image.bandNames()
-    new_names = band_names.map(lambda name: ee.String(name).cat('_Anomaly'))
-    
-    return anomaly_image.rename(new_names)
-
-# Function to identify hotspots based on anomalies
-def identify_hotspots(anomaly_image, thresholds):
-    """
-    Identify potential fire hotspots based on anomalies.
-    
-    Args:
-        anomaly_image: ee.Image with anomalies for each band
-        thresholds: Dictionary with threshold values for each anomaly
-    
-    Returns:
-        Dictionary with hotspot layers for different indices
-    """
-    print("Identifying potential fire hotspots...")
-    
-    # Rainfall hotspot (deficit)
-    rain_anomaly = anomaly_image.select('rain_Anomaly')
-    rain_hotspot = rain_anomaly.lt(thresholds['rain']).selfMask().rename('rain_hotspot')
-    
-    # Relative humidity hotspot (deficit)
-    rh_anomaly = anomaly_image.select('rh_Anomaly')
-    rh_hotspot = rh_anomaly.lt(thresholds['rh']).selfMask().rename('rh_hotspot')
-    
-    # Soil moisture hotspot (deficit)
-    sm_anomaly = anomaly_image.select('sm_Anomaly')
-    sm_hotspot = sm_anomaly.lt(thresholds['sm']).selfMask().rename('sm_hotspot')
-    
-    # Vegetation indices hotspots (deficit indicating stress)
-    veg_indices = anomaly_image.select(['ndvi_Anomaly', 'evi_Anomaly', 'msavi_Anomaly', 'ndmi_Anomaly'])
-    veg_hotspot = veg_indices.lt(thresholds['veg']).selfMask().rename('veg_hotspot')
-    
-    # Burn indices hotspots (excess indicating fire potential)
-    burn_indices = anomaly_image.select(['mirbi_Anomaly', 'ST_B10_Anomaly', 'bsi_Anomaly'])
-    burn_hotspot = burn_indices.gt(thresholds['burn']).selfMask().rename('burn_hotspot')
-    
-    # Combine all hotspots
-    all_hotspots = ee.Image.cat([
-        rain_hotspot, rh_hotspot, sm_hotspot, veg_hotspot, burn_hotspot
-    ])
-    
-    return {
-        'rain': rain_hotspot,
-        'rh': rh_hotspot,
-        'sm': sm_hotspot,
-        'veg': veg_hotspot,
-        'burn': burn_hotspot,
-        'all': all_hotspots
-    }
-
-# Function to get land use/land cover data
-def get_land_cover(pa, date_range):
-    """
-    Get land use/land cover data for the study area.
-    
-    Args:
-        pa: ee.Geometry representing the study area
-        date_range: Dictionary with 'start' and 'end' dates
-    
-    Returns:
-        ee.Image with land cover classification
-    """
-    print("Getting land use/land cover data...")
-    
-    # Load Dynamic World land cover data
-    dw_collection = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1') \
-        .filterDate(date_range['start'], date_range['end']) \
-        .filterBounds(pa)
-    
-    # Create a cloud-masked composite
-    dw_composite = dw_collection.map(lambda img: img.clip(pa)).mosaic()
-    
-    # Get the label band (classification)
-    lulc = dw_composite.select('label')
-    
-    return lulc
-
-# Function to analyze hotspots by land cover type
-def analyze_hotspots_by_land_cover(hotspots, lulc, pa):
-    """
-    Analyze hotspots by land cover type.
-    
-    Args:
-        hotspots: Dictionary with hotspot layers
-        lulc: ee.Image with land cover classification
-        pa: ee.Geometry representing the study area
-    
-    Returns:
-        Dictionary with hotspot statistics by land cover type
-    """
-    print("Analyzing hotspots by land cover type...")
-    
-    # Define land cover classes
-    land_cover_classes = {
-        0: 'water',
-        1: 'trees',
-        2: 'grass',
-        3: 'flooded_vegetation',
-        4: 'crops',
-        5: 'shrub_and_scrub',
-        6: 'built',
-        7: 'bare',
-        8: 'snow_and_ice'
-    }
-    
-    # Analyze each hotspot type by land cover
-    results = {}
-    
-    for hotspot_name, hotspot_image in hotspots.items():
-        if hotspot_name == 'all':
-            continue
-            
-        # Create a binary mask of the hotspot
-        hotspot_mask = hotspot_image.gt(0)
-        
-        # Calculate area of hotspot by land cover class
-        hotspot_by_lulc = hotspot_mask.multiply(ee.Image.pixelArea()).addBands(lulc) \
-            .reduceRegion(
-                reducer=ee.Reducer.sum().group(1),
-                geometry=pa,
-                scale=30,
-                maxPixels=1e13
-            )
-        
-        # Extract results
-        groups = ee.List(hotspot_by_lulc.get('groups'))
-        
-        # Store results
-        results[hotspot_name] = groups
-    
-    return results
-
-# Function to export hotspot maps to Google Drive
-def export_hotspots(hotspots, pa, output_folder='ForestFireGoa'):
-    """
-    Export hotspot maps to Google Drive.
-    
-    Args:
-        hotspots: Dictionary with hotspot layers
-        pa: ee.Geometry representing the study area
-        output_folder: Google Drive folder name
-    """
-    print(f"Exporting hotspot maps to Google Drive folder '{output_folder}'...")
-    
-    # Export each hotspot type
-    for hotspot_name, hotspot_image in hotspots.items():
-        task = ee.batch.Export.image.toDrive({
-            'image': hotspot_image,
-            'description': f'fire_hotspot_{hotspot_name}',
-            'folder': output_folder,
-            'fileNamePrefix': f'fire_hotspot_{hotspot_name}',
-            'region': pa,
-            'scale': 30,
-            'maxPixels': 1e13
-        })
-        
-        task.start()
-        print(f"Started export task for {hotspot_name} hotspot with ID: {task.id}")
-
-# Main function to run the entire workflow
 def main():
-    """
-    Main function to run the trend anomaly prediction workflow.
-    """
-    print("Starting forest fire trend anomaly prediction for Goa, India...")
-    
-    # Get the study area boundary
-    pa = get_study_boundary()
-    
-    # Define date range for current conditions (e.g., latest month)
-    # These dates should be adjusted based on your specific analysis period
-    current_date_range = {
-        'start': '2023-02-01',
-        'end': '2023-02-28'
-    }
-    
-    # Define reference time for trend calculations (e.g., start of historical period)
-    reference_time = 2013.0  # Start of analysis in decimal years
-    
-    # Calculate current time in decimal years
-    current_year = 2023
-    current_month = 2
-    current_time = current_year + (current_month - 1) / 12
-    
-    # Load fire events data
-    fire_events = load_fire_events(pa)
-    
-    # Get current observational data
-    current_ls = get_current_landsat(pa, current_date_range)
-    current_rh = get_current_relative_humidity(pa, current_date_range)
-    current_sm = get_current_soil_moisture(pa, current_date_range)
-    current_rain = get_current_precipitation(pa, current_date_range)
-    
-    # Combine all current data
-    current_all = current_ls.addBands([current_rain, current_sm, current_rh])
-    
-    # Load trend coefficients from TrendFire output
-    trend_coefficients = load_trend_coefficients(pa)
-    
-    # Predict values based on trend coefficients
-    predicted_values = predict_from_trends(trend_coefficients, current_time, reference_time)
-    
-    # Calculate anomalies
-    anomaly_image = calculate_anomalies(current_all, predicted_values)
-    
-    # Define thresholds for hotspot identification
-    # These thresholds would need to be calibrated for your specific study area
-    thresholds = {
-        'rain': 0,       # Rainfall below predicted value
-        'rh': 60,        # RH below 60% of predicted value
-        'sm': -50,       # Soil moisture 50% below predicted value
-        'veg': -0.15,    # Vegetation indices 0.15 below predicted value
-        'burn': 3.2      # Burn indices 3.2 above predicted value
-    }
-    
-    # Identify hotspots
-    hotspots = identify_hotspots(anomaly_image, thresholds)
-    
-    # Get land cover data
-    lulc = get_land_cover(pa, current_date_range)
-    
-    # Analyze hotspots by land cover
-    hotspot_analysis = analyze_hotspots_by_land_cover(hotspots, lulc, pa)
-    
-    # Export hotspot maps to Google Drive (uncomment to use)
-    # export_hotspots(hotspots, pa)
-    
-    print("Forest fire trend anomaly prediction complete!")
-    print("To visualize the results, check your Google Drive for the exported hotspot maps.")
+    """Main function to calculate and export trend anomalies."""
+    if not initialize_ee():
+        return # Stop if EE initialization fails
+
+    pa = get_goa_boundary()
+    if pa is None:
+        print("Error: Could not load study area boundary. Exiting.")
+        return
+
+    print("Successfully loaded study area boundary.")
+
+    # --- Define Time Periods ---
+    trend_start_date = '2013-03-20'
+    trend_end_date = '2023-02-28' # Corresponds to TrendFire.py output
+    present_start_date = '2023-02-01'
+    present_end_date = '2023-02-28'
+    rain_present_year_start = '2022-01-01'
+    rain_present_year_end = '2022-12-31'
+    rh_sm_start_date = '1980-01-01' # Start date for RH trend baseline
+    sm_start_date = '2015-04-01' # Start date for SM trend baseline
+    rain_start_date = '1982-01-01' # Start date for Rain trend baseline
+
+
+    # --- Load Trend Image Asset ---
+    trend_asset_id = 'users/jonasnothnagel/Trend2024_all_new' # Asset from TrendFire.py
+    print(f"Loading trend image asset: {trend_asset_id}")
+    try:
+        input_trends = ee.Image(trend_asset_id)
+        # Verify bands (optional)
+        # print("Trend bands:", input_trends.bandNames().getInfo())
+    except Exception as e:
+        print(f"Error loading trend asset {trend_asset_id}: {e}")
+        print("Please ensure the asset exists and you have access.")
+        return
+
+    # --- (Optional) Load Fire Points ---
+    # Assuming Asset IDs - replace with actual IDs if available/needed
+    # print("Loading fire points...")
+    # try:
+    #     fire13_19_asset = 'YOUR_ASSET_ID/fire13_19' # Replace
+    #     fire20_23_asset = 'YOUR_ASSET_ID/fire20_23' # Replace
+    #     fire13_19 = ee.FeatureCollection(fire13_19_asset)
+    #     fire20_23 = ee.FeatureCollection(fire20_23_asset)
+    #     fire13_23 = fire13_19.merge(fire20_23)
+    #     # Filter as in JS if needed for visualization/context
+    #     fireMarch2023 = fire13_23.filter(ee.Filter.stringContains('acq_date', '2023')) # Simplified filter
+    #     print(f"Loaded {fire13_23.size().getInfo()} total fire points.")
+    # except Exception as e:
+    #     print(f"Warning: Could not load fire point assets: {e}. Continuing without them.")
+    #     fireMarch2023 = None # Set to None if loading fails
+
+
+    print("\nCalculating predicted values based on trends...")
+    # --- Calculate Predicted Values (Past_Pred) ---
+    target_date_landsat = ee.Date(present_start_date) # Use start of month for prediction point
+    target_date_rain = ee.Date(rain_present_year_start)
+    target_date_rh = target_date_landsat
+    target_date_sm = target_date_landsat
+
+    # Calculate time differences in years
+    const_landsat_years = target_date_landsat.difference(ee.Date(trend_start_date), 'year')
+    const_rain_years = target_date_rain.difference(ee.Date(rain_start_date), 'year')
+    const_rh_years = target_date_rh.difference(ee.Date(rh_sm_start_date), 'year') # JS used constRain, seems incorrect, use RH baseline
+    const_sm_years = target_date_sm.difference(ee.Date(sm_start_date), 'year') # JS used constRain, seems incorrect, use SM baseline
+
+    # Select slope and intercept bands - Ensure names match TrendFire.py output
+    landsat_indices = ['ndvi', 'evi', 'mirbi', 'ndfi', 'bsi', 'ndmi', 'nbr', 'nbr2', 'msavi', 'smi', 'ST_B10']
+    slope_bands_ls = [f'{idx}_Slope' for idx in landsat_indices]
+    intercept_bands_ls = [f'{idx}_Intercept' for idx in landsat_indices]
+    other_indices = ['rain', 'sm_surface', 'rh']
+    slope_bands_other = [f'{idx}_Slope' for idx in other_indices]
+    intercept_bands_other = [f'{idx}_Intercept' for idx in other_indices]
+
+    # Select bands from the input trend image
+    slopes_ls = input_trends.select(slope_bands_ls)
+    intercepts_ls = input_trends.select(intercept_bands_ls)
+    slopes_other = input_trends.select(slope_bands_other)
+    intercepts_other = input_trends.select(intercept_bands_other)
+
+    # Calculate predicted values for Landsat-based indices
+    predicted_ls = slopes_ls.multiply(const_landsat_years).add(intercepts_ls).rename(landsat_indices)
+
+    # Calculate predicted values for other indices
+    pred_rain = slopes_other.select('rain_Slope').multiply(const_rain_years).add(intercepts_other.select('rain_Intercept')).rename('rain')
+    pred_sm = slopes_other.select('sm_surface_Slope').multiply(const_sm_years).add(intercepts_other.select('sm_surface_Intercept')).rename('sm')
+    pred_rh = slopes_other.select('rh_Slope').multiply(const_rh_years).add(intercepts_other.select('rh_Intercept')).rename('rh')
+
+    # Combine all predicted values
+    past_Pred = predicted_ls.addBands([pred_rain, pred_sm, pred_rh])
+    # Reorder bands to match expected order for subtraction later
+    ordered_pred_bands = ['smi', 'ST_B10', 'ndvi', 'evi', 'msavi', 'mirbi', 'ndmi', 'ndfi', 'nbr', 'nbr2', 'bsi', 'rain', 'rh', 'sm']
+    past_Pred = past_Pred.select(ordered_pred_bands)
+    print("Predicted values calculated.")
+    # print("Predicted bands:", past_Pred.bandNames().getInfo())
+
+
+    print("\nCalculating present-day observed values...")
+    # --- Calculate Present-Day Values (Present_All) ---
+
+    # 1. Landsat Present (Feb 2023 Mosaic)
+    print("Processing present-day Landsat (Feb 2023)...")
+    present_ls_collection = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
+        .filterDate(present_start_date, present_end_date) \
+        .filterBounds(pa) \
+        .map(maskL8sr) \
+        .map(lambda img: img.clip(pa)) \
+        .map(addIndices)
+
+    # Calculate SWIR min/max for *this specific collection* for SMI
+    swir_stats_present = present_ls_collection.mean().select('SR_B7').reduceRegion(
+        reducer=ee.Reducer.minMax(),
+        geometry=pa,
+        scale=30,
+        maxPixels=1e9 # Use lower maxPixels for reduceRegion if needed
+    )
+    # Handle potential nulls if collection is empty
+    swir_min_present = ee.Number(ee.Algorithms.If(swir_stats_present.contains('SR_B7_min'), swir_stats_present.get('SR_B7_min'), 0))
+    swir_max_present = ee.Number(ee.Algorithms.If(swir_stats_present.contains('SR_B7_max'), swir_stats_present.get('SR_B7_max'), 1)) # Avoid divide by zero
+
+    present_ls_collection_smi = present_ls_collection.map(lambda img: addSMI_local(img, swir_min_present, swir_max_present))
+
+    # Select relevant bands and create mosaic
+    present_ls_bands = ['smi', 'ST_B10', 'ndvi', 'evi', 'msavi', 'mirbi', 'ndmi', 'ndfi', 'nbr', 'nbr2', 'bsi']
+    present_ls = present_ls_collection_smi.select(present_ls_bands).mosaic()
+    print("Landsat mosaic created.")
+
+    # 2. ERA5 RH Present (Feb 2023 Mean)
+    print("Processing present-day ERA5 RH (Feb 2023)...")
+    era5_present = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_AGGR") \
+        .filterDate(present_start_date, present_end_date) \
+        .filterBounds(pa) \
+        .map(lambda img: img.clip(pa))
+
+    def calculateRH(image):
+        dewPoint_k = image.select('dewpoint_temperature_2m')
+        temp_k = image.select('temperature_2m')
+        eT = calcVaporPressure(temp_k)
+        eTd = calcVaporPressure(dewPoint_k)
+        # Avoid division by zero if eT is 0
+        rh = eTd.divide(eT).multiply(100).max(0).min(100) # Clamp RH between 0 and 100
+        return rh.rename('rh').set('system:time_start', image.get('system:time_start'))
+
+    rh_collection_present = era5_present.map(calculateRH)
+    present_rh = rh_collection_present.mean() # Use mean for monthly agg
+    print("ERA5 RH calculated.")
+
+
+    # 3. SMAP Present (Feb 2023 Mosaic)
+    print("Processing present-day SMAP (Feb 2023)...")
+    smap_present_col = ee.ImageCollection('NASA/SMAP/SPL3SMP_E/005') \
+        .filterDate(present_start_date, present_end_date) \
+        .filterBounds(pa) \
+        .map(lambda img: img.clip(pa)) \
+        .select(['soil_moisture_am'])
+    present_sm = smap_present_col.mosaic().rename('sm')
+    print("SMAP mosaic created.")
+
+
+    # 4. CHIRPS Rain Present (Sum for 2022)
+    print("Processing present-day CHIRPS Rain (2022 Sum)...")
+    chirps_present_col = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY') \
+              .filterDate(rain_present_year_start, rain_present_year_end) \
+              .filterBounds(pa)
+
+    # Calculate sum for the year 2022
+    yearly_sum_2022 = chirps_present_col.sum().clip(pa).rename('rain')
+    present_rain = yearly_sum_2022
+    print("CHIRPS Rain sum calculated.")
+
+    # Combine all present-day layers
+    present_all = present_ls.addBands([present_rain, present_rh, present_sm])
+    # Select bands in the same order as past_Pred
+    present_all = present_all.select(ordered_pred_bands)
+    print("Present-day layers combined.")
+    # print("Present bands:", present_all.bandNames().getInfo())
+
+
+    print("\nCalculating anomaly image...")
+    # --- Calculate Anomaly Image ---
+    anomalyImage = present_all.subtract(past_Pred)
+
+    # Rename bands to include '_Anomaly'
+    anomaly_band_names = [f'{b}_Anomaly' for b in ordered_pred_bands]
+    anomalyImage = anomalyImage.rename(anomaly_band_names)
+    print("Anomaly image calculated.")
+    # print("Anomaly bands:", anomalyImage.bandNames().getInfo())
+
+
+    # --- Define Target Export Bounds (matching TrendFire.py output) ---
+    # Ensures consistent grid with previous step's output
+    target_bounds_coords = [
+        [8246820.0, 1680600.0], # bottom-left (x, y)
+        [8275140.0, 1680600.0], # bottom-right (x, y)
+        [8275140.0, 1767960.0], # top-right (x, y)
+        [8246820.0, 1767960.0], # top-left (x, y)
+        [8246820.0, 1680600.0]  # close the loop
+    ]
+    target_export_region = ee.Geometry.Polygon(target_bounds_coords, proj='EPSG:3857', evenOdd=False)
+
+
+    # --- Export Anomaly Image ---
+    print("\nExporting anomaly image...")
+    export_to_drive(
+        image=anomalyImage.toFloat(), # Ensure float32 for export consistency
+        filename='TrendAnomalyPy_output',
+        region=pa, # Use original geometry for context, bounds dictate output extent
+        description='Trend_Anomaly_Python_Output',
+        folder='GEE_Exports_Anomaly',
+        scale=30,
+        export_bounds=target_export_region
+    )
+
+    print("\nScript finished. Monitor GEE Tasks for export completion.")
+
 
 if __name__ == "__main__":
-    main() 
+    # Add dependency check if desired
+    try:
+        import geopandas
+        import shapely
+    except ImportError as e:
+        print(f"Missing dependency: {e}")
+        print("Please install required libraries: pip install geopandas shapely")
+    else:
+        main() 

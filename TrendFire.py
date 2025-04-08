@@ -25,6 +25,7 @@ import pandas as pd
 import geopandas as gpd
 from tqdm import tqdm
 from shapely.geometry import Polygon
+import ee.data # Import the data module
 
 # Initialize the Earth Engine API
 def initialize_ee():
@@ -490,26 +491,46 @@ def merge_trend_layers(ls_trends, rain_trend, sm_trend, rh_trend):
 def export_to_asset(image, asset_name, region, description=None, scale=30, export_bounds=None):
     """
     Export an image to a Google Earth Engine asset.
+    Deletes the asset first if it already exists.
     Allows specifying explicit export bounds.
     """
     if description is None:
         description = asset_name.split('/')[-1]
-    
+
+    # --- Check and delete existing asset --- 
+    try:
+        asset_info = ee.data.getInfo(asset_name)
+        if asset_info:
+            print(f"Asset {asset_name} already exists. Deleting...")
+            ee.data.deleteAsset(asset_name)
+            print(f"Asset {asset_name} deleted.")
+    except ee.EEException as e:
+        # Handle case where asset doesn't exist (getInfo throws an EEException)
+        if 'not found' in str(e):
+            print(f"Asset {asset_name} not found. Proceeding with export.")
+        else:
+            print(f"Error checking/deleting asset {asset_name}: {e}. Proceeding with export attempt...")
+    except Exception as e:
+        # Catch other potential errors during check/delete
+        print(f"Unexpected error checking/deleting asset {asset_name}: {e}. Proceeding with export attempt...")
+    # --------------------------------------
+
     # Use provided bounds if available, otherwise use the region geometry's bounds
     export_region = export_bounds if export_bounds else region
 
+    print(f"Starting export task to Asset: {description}")
     task = ee.batch.Export.image.toAsset(
         image=image, # Image should be pre-projected and cast
         description=description,
         assetId=asset_name,
         region=export_region,
         scale=scale,
-        crs='EPSG:3857',       
+        crs='EPSG:3857',
         maxPixels=1e13
     )
-    
+
     task.start()
-    print(f"Started export task to Asset: {description}")
+    print(f"Task started (id: {task.id}). Check GEE Tasks or use monitoring tools.")
     return task
 
 # Function to export the trends to Google Drive
@@ -542,6 +563,7 @@ def export_to_drive(image, filename, region, description=None, folder='GEE_Expor
 def main():
     """
     Main function to process all trends and export results.
+    Exports two versions: one matching inputResampled extent, one covering the full study area.
     """
     # Initialize Earth Engine
     initialize_ee()
@@ -587,41 +609,71 @@ def main():
         [8246820.0, 1767960.0], # top-left (x, y)
         [8246820.0, 1680600.0]  # close the loop
     ]
-    target_export_region = ee.Geometry.Polygon(target_bounds_coords, proj='EPSG:3857', evenOdd=False)
+    target_export_region_limited = ee.Geometry.Polygon(target_bounds_coords, proj='EPSG:3857', evenOdd=False)
 
     # --- Explicitly set data type and CRS before export ---
-    # Note: Reprojection happens here, but export uses target_export_region for extent
-    print("Casting to float32 and reprojecting to EPSG:3857...")
-    all_trends_export = all_trends.toFloat() \
-                                 .reproject(crs='EPSG:3857', scale=30)
-    
-    # Export the merged trends to Asset
-    print("Exporting merged trends to GEE Asset...")
+    print("Casting final trend image to float32 and setting projection to EPSG:3857...")
+    # Apply casting and projection ONCE to the merged image
+    # Exports will use this projected image but different bounding regions
+    all_trends_export_ready = all_trends.toFloat() \
+                                       .reproject(crs='EPSG:3857', scale=30)
+
+    # --- EXPORT 1: Limited Extent (Matching inputResampled.tif) --- 
+    print("\n--- Starting Export for Limited Extent (Match JS Output Grid) ---")
+    asset_id_limited = 'users/jonasnothnagel/TrendFirePy_LimitedExtent' # New asset ID
+    drive_filename_limited = 'TrendFirePy_LimitedExtent'
+
+    # Export Asset (Limited)
     export_to_asset(
-        all_trends_export, 
-        'users/jonasnothnagel/Trend2024_all_new',
-        goa, # Original region used for clipping/processing
-        description='All_Trends_2024_Asset', 
+        all_trends_export_ready, 
+        asset_id_limited,
+        goa, # Original region for context, bounds override
+        description=f'{asset_id_limited.split("/")[-1]}_Asset', 
         scale=30,
-        export_bounds=target_export_region # Pass the explicit bounds
+        export_bounds=target_export_region_limited # Use the limited bounds
     )
 
-    # Export the merged trends to Google Drive
-    print("Exporting merged trends to Google Drive...")
+    # Export Drive (Limited)
     export_to_drive(
-        all_trends_export, 
-        'TrendFirePy_output', 
-        goa, # Original region used for clipping/processing
-        description='All_Trends_2024_Drive', 
+        all_trends_export_ready, 
+        drive_filename_limited, 
+        goa, # Original region for context, bounds override
+        description=f'{drive_filename_limited}_Drive', 
         folder='GEE_Exports',      
         scale=30,
-        export_bounds=target_export_region # Pass the explicit bounds
+        export_bounds=target_export_region_limited # Use the limited bounds
     )
-    
+
+    # --- EXPORT 2: Full Extent (Covering pa_boundary.shp) --- 
+    print("\n--- Starting Export for Full Study Area Extent ---")
+    asset_id_full = 'users/jonasnothnagel/TrendFirePy_FullExtent' # New asset ID
+    drive_filename_full = 'TrendFirePy_FullExtent'
+
+    # Export Asset (Full) - Use goa geometry for bounds implicitly
+    export_to_asset(
+        all_trends_export_ready, 
+        asset_id_full,
+        goa, # Let GEE determine bounds from this geometry
+        description=f'{asset_id_full.split("/")[-1]}_Asset', 
+        scale=30
+        # No export_bounds specified, defaults to region (goa)
+    )
+
+    # Export Drive (Full) - Use goa geometry for bounds implicitly
+    export_to_drive(
+        all_trends_export_ready, 
+        drive_filename_full, 
+        goa, # Let GEE determine bounds from this geometry
+        description=f'{drive_filename_full}_Drive', 
+        folder='GEE_Exports',      
+        scale=30
+        # No export_bounds specified, defaults to region (goa)
+    )
+
     print("\nAnalysis completed successfully!")
-    print("Results export tasks started for Earth Engine assets and Google Drive.")
-    print("Monitor task status in the GEE Code Editor or using task monitoring tools.")
+    print("Multiple export tasks started. Monitor GEE Tasks.")
     
+    # Return the original merged trends (before final reprojection for export)
     return {
         'trends': all_trends,
         'collections': {
