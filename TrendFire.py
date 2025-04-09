@@ -310,9 +310,9 @@ def process_landsat_trends(goa, start_date='2013-03-20', end_date='2023-02-28'):
     # Export the combined trends
     export_to_asset(
         all_trends,
-        'users/jonasnothnagel/Trend2023_landsat',
+        'users/jonasnothnagel/Trend2023_landsat_py',
         goa,
-        'Landsat_Trends_2023',
+        'Landsat_Trends_2023_py',
         scale=30
     )
     
@@ -367,9 +367,9 @@ def process_chirps_trends(goa, start_date='1982-01-01', end_date='2022-12-31'):
     # Export the trend
     export_to_asset(
         trend,
-        'users/jonasnothnagel/Trend2022_rain_new',
+        'users/jonasnothnagel/Trend2022_rain_new_py',
         goa,
-        'Precipitation_Trend_1982_2022',
+        'Precipitation_Trend_1982_2022_py',
         scale=30
     )
     
@@ -407,9 +407,9 @@ def process_smap_trends(goa, start_date='2015-04-01', end_date='2023-02-28'):
     # Export the trend
     export_to_asset(
         trend,
-        'users/jonasnothnagel/Trend2023_SM_new',
+        'users/jonasnothnagel/Trend2023_SM_new_py',
         goa,
-        'SM_Trend2015_2023',
+        'SM_Trend2015_2023_py',
         scale=30
     )
     
@@ -469,9 +469,9 @@ def process_era5_trends(goa, start_date='1980-01-01', end_date='2023-02-28'):
     # Export the trend
     export_to_asset(
         trend,
-        'users/jonasnothnagel/Trend2024_RH_new',
+        'users/jonasnothnagel/Trend2024_RH_new_py',
         goa,
-        'RH_Trend1980_2023',
+        'RH_Trend1980_2023_py',
         scale=30
     )
     
@@ -620,7 +620,7 @@ def main():
 
     # --- EXPORT 1: Limited Extent (Matching inputResampled.tif) --- 
     print("\n--- Starting Export for Limited Extent (Match JS Output Grid) ---")
-    asset_id_limited = 'users/jonasnothnagel/TrendFirePy_LimitedExtent' # New asset ID
+    asset_id_limited = 'users/jonasnothnagel/TrendFirePy_LimitedExtent_py'
     drive_filename_limited = 'TrendFirePy_LimitedExtent'
 
     # Export Asset (Limited)
@@ -646,7 +646,7 @@ def main():
 
     # --- EXPORT 2: Full Extent (Covering pa_boundary.shp) --- 
     print("\n--- Starting Export for Full Study Area Extent ---")
-    asset_id_full = 'users/jonasnothnagel/TrendFirePy_FullExtent' # New asset ID
+    asset_id_full = 'users/jonasnothnagel/TrendFirePy_FullExtent_py'
     drive_filename_full = 'TrendFirePy_FullExtent'
 
     # Export Asset (Full) - Use goa geometry for bounds implicitly
