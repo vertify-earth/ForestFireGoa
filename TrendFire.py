@@ -28,14 +28,27 @@ from shapely.geometry import Polygon
 import ee.data # Import the data module
 
 # Initialize the Earth Engine API
-def initialize_ee():
+def initialize_ee(project_id='ee-crop-health-telangana'):
     try:
+        # Attempt authentication. Might prompt user if credentials are not found.
         ee.Authenticate()
-        ee.Initialize()
-        print("Earth Engine API initialized successfully.")
+        
+        # Initialize with the specified project ID.
+        ee.Initialize(project=project_id)
+        
+        print(f"Earth Engine API initialized successfully for project: {project_id}")
+    except ee.EEException as e:
+        print(f"Error initializing Earth Engine API for project {project_id}: {e}")
+        print("Please ensure:")
+        print("  1. You have authenticated with `ee.Authenticate()`.")
+        print(f"  2. The project ID '{project_id}' is correct.")
+        print("  3. The Earth Engine API is enabled for this project in Google Cloud Console.")
+        print("  4. The account used for authentication has access to this project.")
+        raise # Re-raise the exception to stop execution if initialization fails
     except Exception as e:
-        print(f"Error initializing Earth Engine API: {e}")
-        print("Make sure you have authenticated with Earth Engine using ee.Authenticate()")
+        # Catch other potential errors during initialization
+        print(f"An unexpected error occurred during Earth Engine initialization: {e}")
+        raise
 
 # Function to debug the shapefile
 def debug_shapefile(boundary_path):
@@ -67,54 +80,39 @@ def debug_shapefile(boundary_path):
 # Define the Goa study area boundary
 def get_goa_boundary():
     """
-    Get the boundary of the study area from the pa_boundary shapefile.
+    Get the boundary of the study area directly from the GEE asset.
     Returns an ee.Geometry object.
     """
     try:
-        # Try to load the boundary from the shapefile
-        boundary_path = os.path.join('data', 'pa_boundary.shp')
-        if os.path.exists(boundary_path):
-            print("Loading study area boundary from shapefile...")
-            
-            # Debug the shapefile
-            gdf = debug_shapefile(boundary_path)
-            if gdf is None:
-                return None
-            
-            # Ensure we have at least one valid geometry
-            if len(gdf) == 0:
-                print("Error: Shapefile contains no features")
-                return None
-            
-            # Get the first geometry
-            geometry = gdf.geometry.iloc[0]
-            
-            # Check if geometry is valid
-            if not geometry.is_valid:
-                print("Error: Geometry is invalid")
-                return None
-            
-            # Convert 3D polygon to 2D by dropping Z coordinates
-            if geometry.has_z:
-                print("Converting 3D polygon to 2D...")
-                # Get the coordinates and drop Z values
-                coords = list(geometry.exterior.coords)
-                coords_2d = [(x, y) for x, y, z in coords]
-                # Create new 2D polygon
-                geometry = Polygon(coords_2d)
-            
-            # Convert to GeoJSON
-            gdf.geometry = gpd.GeoSeries([geometry])
-            boundary_geojson = gdf.__geo_interface__
-            
-            # Create an EE geometry
-            return ee.Geometry.Polygon(boundary_geojson['features'][0]['geometry']['coordinates'])
-        else:
-            print(f"Error: Could not find pa_boundary.shp at {boundary_path}")
-            print("Please ensure the shapefile exists in the data directory")
+        asset_id = 'users/jonasnothnagel/pa_boundary'
+        print(f"Loading study area boundary from GEE asset: {asset_id}...")
+        goa_fc = ee.FeatureCollection(asset_id)
+        
+        # Ensure the collection is not empty
+        if goa_fc.size().getInfo() == 0:
+            print(f"Error: Asset {asset_id} is empty or inaccessible.")
             return None
+        
+        # Get the geometry of the first feature (assuming it's a single polygon feature)
+        # Use .geometry() to simplify the FeatureCollection to a single Geometry
+        # Use .dissolve() first to merge geometries if it might be a multi-part feature collection
+        goa_geometry = goa_fc.geometry().dissolve()
+        
+        # Optional: Check geometry validity (can be computationally intensive)
+        # is_valid = goa_geometry.isValid().getInfo()
+        # if not is_valid:
+        #     print(f"Warning: Geometry from asset {asset_id} may not be valid according to GEE.")
+        
+        print("Successfully loaded boundary from GEE asset.")
+        return goa_geometry
+        
+    except ee.EEException as e:
+        print(f"Error loading boundary from GEE asset {asset_id}: {e}")
+        print("Please ensure the asset exists and you have read permissions.")
+        return None
     except Exception as e:
-        print(f"Error loading boundary from shapefile: {e}")
+        # Catch other potential errors 
+        print(f"An unexpected error occurred loading the boundary asset: {e}")
         return None
 
 # Function to mask clouds in Landsat 8 imagery
