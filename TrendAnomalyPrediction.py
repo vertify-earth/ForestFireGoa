@@ -31,7 +31,7 @@ def initialize_ee(project_id='ee-crop-health-telangana'): # Use the verified pro
     """Initializes the Earth Engine API."""
     try:
         # Attempt authentication. Might prompt user if credentials are not found.
-        # ee.Authenticate() # Often needed only once per session/machine
+        ee.Authenticate() # Often needed only once per session/machine
         
         # Initialize with the specified project ID.
         ee.Initialize(project=project_id, opt_url='https://earthengine-highvolume.googleapis.com') # Use high volume endpoint
@@ -254,11 +254,15 @@ def calcVaporPressure(temp_k):
 
 def main():
     """Main script execution."""
-    # --- Configuration ---
+    # --- Initialization (Moved to the top) ---
     PROJECT_ID = 'ee-crop-health-telangana' # Or get from environment variable
+    initialize_ee(PROJECT_ID)
+    
+    # --- Configuration ---
     BOUNDARY_ASSET_ID = 'users/jonasnothnagel/pa_boundary'
     OUTPUT_ASSET_BASE = 'users/jonasnothnagel/' # Base path for output assets
     
+    # Now create GEE objects after initialization
     PREDICTION_DATE = ee.Date('2023-03-01')
     PRESENT_START_DATE = '2023-02-01' # For LS, SM, RH
     PRESENT_END_DATE = '2023-02-28'   # For LS, SM, RH
@@ -273,8 +277,7 @@ def main():
         'rh': ee.Date('1980-01-01')
     }
     
-    # --- Initialization ---
-    initialize_ee(PROJECT_ID)
+    # --- Load Boundary (after init) ---
     boundary = get_goa_boundary(BOUNDARY_ASSET_ID)
     if boundary is None:
         print("Exiting: Could not load boundary.")
