@@ -441,7 +441,7 @@ def calculate_predicted_values(trend_image, prediction_date, ref_dates):
         prediction_date: ee.Date object for the prediction target date.
         ref_dates: Dictionary mapping dataset type ('landsat', 'rain', 'sm', 'rh') 
                    to its trend reference start ee.Date.
-
+    
     Returns:
         ee.Image with predicted values for each index (bands named 'index').
     """
@@ -528,7 +528,7 @@ def get_present_data(boundary, present_start, present_end, rain_year_start, rain
         present_end: End date (YYYY-MM-DD) for Landsat, SMAP, ERA5.
         rain_year_start: Start date (YYYY-MM-DD) for the annual rainfall sum year.
         rain_year_end: End date (YYYY-MM-DD) for the annual rainfall sum year.
-        
+    
     Returns:
         ee.Image with observed values (bands named 'index').
     """
