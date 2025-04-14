@@ -314,8 +314,8 @@ def main():
         print("Anomaly image calculated.")
         # print(anomaly_image.bandNames().getInfo()) # Verify band names
 
-        # --- Export Results ---
-        anomaly_asset_id = OUTPUT_ASSET_BASE + 'TrendAnomaly_py' # Example output name
+        # --- Export Full Anomaly Results ---
+        anomaly_asset_id = OUTPUT_ASSET_BASE + 'TrendAnomaly_py' 
         export_to_asset(
             image=anomaly_image,
             asset_id=anomaly_asset_id,
@@ -323,6 +323,43 @@ def main():
             description='Trend_Anomaly_Python',
             scale=30 
         )
+        
+        # --- Calculate and Export Specific Hotspots (Matching JS Drive Exports) ---
+        print("Calculating and exporting specific hotspots...")
+        try:
+            # ST_B10 Hotspot (Thermal Anomaly)
+            stb10_hotspot = anomaly_image.select('ST_B10_Anomaly').gt(3.2) # Pixels significantly hotter than predicted
+            # Masking non-hotspot areas (optional, makes visualization cleaner)
+            # stb10_hotspot = stb10_hotspot.selfMask() 
+            stb10_asset_id = OUTPUT_ASSET_BASE + 'TrendAnomaly_STB10_Hotspot_py'
+            export_to_asset(
+                image=stb10_hotspot.unmask(0).toFloat(), # Export boolean as 0/1 float
+                asset_id=stb10_asset_id,
+                region=boundary,
+                description='Hotspot_STB10_py',
+                scale=30
+            )
+
+            # NDMI Hotspot (Moisture Anomaly)
+            ndmi_hotspot = anomaly_image.select('ndmi_Anomaly').lt(-0.15) # Pixels significantly drier than predicted
+            # ndmi_hotspot = ndmi_hotspot.selfMask()
+            ndmi_asset_id = OUTPUT_ASSET_BASE + 'TrendAnomaly_NDMI_Hotspot_py'
+            export_to_asset(
+                image=ndmi_hotspot.unmask(0).toFloat(), # Export boolean as 0/1 float
+                asset_id=ndmi_asset_id,
+                region=boundary,
+                description='Hotspot_NDMI_py',
+                scale=30
+            )
+            print("Hotspot export tasks started.")
+
+        except ee.EEException as e:
+             print(f"Could not calculate or export hotspots: {e}")
+             # Check if specific anomaly bands exist in anomaly_image
+             print("Available anomaly bands:", anomaly_image.bandNames().getInfo())
+        except Exception as e:
+             print(f"Unexpected error during hotspot processing: {e}")
+
     else:
         print("Skipping anomaly calculation and export due to missing inputs (likely placeholder functions)." ) # Updated message
 
