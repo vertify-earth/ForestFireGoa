@@ -16,28 +16,38 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
    - Utilize trend layers to predict high-risk fire zones in the near future.
 
 ## Execution Sequence
-### 1. Trend Calculation (`Trendfire.js` / `TrendFire.py`)
-   - Calculates long-term (decadal) linear trends (Slope and Intercept) for various environmental indicators within the study area (`pa_boundary`).
-   - **Datasets Used:** Landsat 8 (Vegetation/Burn Indices, LST), CHIRPS Daily (Precipitation), SMAP (Soil Moisture), ERA5-Land Monthly (Relative Humidity).
-   - **Method:** Filters datasets by date and boundary, applies relevant masking (e.g., cloud masking for Landsat), calculates indices, fits a linear trend over time (`ee.Reducer.linearFit()`), and exports the resulting slope/intercept bands.
-   - **Outputs (JS Version):** Individual GEE assets for each index trend (e.g., `users/.../Trend2023_ndvi`, `users/.../Trend2022_rain_new`).
-   - **Outputs (Python Version):** Merged GEE assets containing all trend bands (e.g., `users/.../TrendFirePy_FullExtent_py`) and optionally individual trend assets.
 
-### 2. Fire Vulnerability Mapping (`FireVulnerability.js` / `FireVulnerability.py` - *Python version TBD*)
+**Note on `inputResampled.tif`:** The original README linked to a file named `inputResampled.tif` for multiple steps. Analysis of the code reveals this file is actually an **intermediate output** created *within* the Fire Vulnerability Mapping step (Step 2). It represents a combination and resampling of *all* features used in that step (including TrendFire outputs, NICFI, MODIS LST, DEM slope, roads). It is **not** a direct output of Step 1 (`TrendFire`) and **not** an input to Step 3 (`TrendAnomalyPrediction`). The descriptions below reflect the actual inputs/outputs based on the code logic.
+
+### 1. Trend Calculation (`Trendfire.js` / `TrendFire.py`)
+   - **Goal:** Calculate long-term (decadal) linear trends (Slope and Intercept) for various environmental indicators.
+   - **Input:** Study area boundary (`pa_boundary` asset).
+   - **Datasets Used:** Landsat 8 (Vegetation/Burn Indices, LST), CHIRPS Daily (Precipitation), SMAP (Soil Moisture), ERA5-Land Monthly (Relative Humidity).
+   - **Method:** Filters datasets by date and boundary, applies masking, calculates indices, fits a linear trend (`ee.Reducer.linearFit()`).
+   - **Outputs:** Individual GEE assets for each calculated trend (e.g., `users/.../Trend2023_ndvi` (Slope+Intercept), `users/.../Trend2022_rain_new` (Slope+Intercept), etc.). The Python version can optionally export a single merged asset containing all trend bands.
+
+### 2. Fire Vulnerability Mapping (`FireVulnerability.js` / `FireVulnerability.py`)
+   - **Goal:** Map the inherent, long-term susceptibility of areas to fire based on environmental factors and historical fire patterns.
    - **Inputs:**
-     - Trend layers (often combined into a single multi-band image like `inputResampled.tif`)
-     - Roads layer
-     - DEM (Digital Elevation Model) derived slope
-     - Historical fire event datasets (`fire13_19`, `fire20_23`)
-     - Other potential factors (e.g., Planet NICFI, MODIS LST)
-   - **Method:** Samples input features at locations of historical fires and random non-fire points. Trains a classifier (e.g., Random Forest) to predict fire risk categories based on the input features. Applies the trained classifier to the entire study area.
-   - **Output:** Fire risk classification map (e.g., Low/Moderate/High risk) at 30m resolution.
+     - Individual Trend layers (from Step 1).
+     - Additional Trend Layers (calculated within this script): NICFI (R/G/B/N/NDVI trends), MODIS LST (Day/Night trends).
+     - Static/Quasi-Static Layers: DEM slope, Roads layer.
+     - Historical Fire Points (e.g., `fire13_19`, `fire20_23` assets).
+   - **Method:**
+     1.  Loads all input layers.
+     2.  Combines all input layers/bands into a single multi-band image.
+     3.  Resamples this combined image to a consistent grid (e.g., 30m EPSG:3857) - *This resampled image is the equivalent of the data in `inputResampled.tif` and is exported by the Python script as `FireVulnerability_InputsResampled_py`.*
+     4.  Generates random points (labelled non-fire) and categorizes historical fire points (e.g., based on 'Delta T' property).
+     5.  Samples the *resampled* multi-band image at the fire/non-fire point locations to create training/validation data.
+     6.  Trains a classifier (e.g., Random Forest) using the sampled data.
+     7.  Applies the trained classifier to the *resampled* multi-band image covering the entire study area.
+   - **Output:** Fire risk classification map (e.g., `FireVulnerability_py` asset) showing predicted vulnerability levels (e.g., Low/High risk) across the study area.
 
 ### 3. Fire Prediction using Trend Anomalies (`TrendAnomalyPrediction.js` / `TrendAnomalyPrediction.py`)
-   - **Goal:** Identify areas behaving abnormally compared to their long-term trends, potentially indicating heightened near-term fire risk.
+   - **Goal:** Identify areas behaving abnormally compared to their long-term trends *just before* a period of interest, potentially indicating heightened *near-term* fire risk.
    - **Inputs:**
-     - Individual Trend layers (Slope/Intercept bands from Step 1, e.g., `users/.../Trend2023_ndvi`)
-     - Study area boundary (`pa_boundary`)
+     - Individual Trend layers (Slope/Intercept bands from Step 1).
+     - Study area boundary (`pa_boundary` asset).
    - **Methodology:**
      1.  **Load Trends:** Loads the individual trend assets (Slopes and Intercepts) generated in Step 1.
      2.  **Predict Expected Conditions:** Uses the linear trend formula (`Predicted = Slope * Time_Difference + Intercept`) to predict the expected value for each indicator for a near-future date (e.g., March 1st, 2023), based on the reference start date of each trend.
@@ -45,11 +55,9 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
      4.  **Calculate Anomaly:** Computes the difference between the observed conditions and the predicted conditions (`Anomaly = Observed - Predicted`).
      5.  **Identify Hotspots:** Applies thresholds to specific anomaly bands (e.g., `ST_B10_Anomaly > 3.2`, `ndmi_Anomaly < -0.15`) to flag areas where conditions deviate significantly from the trend in a way that increases fire risk (e.g., significantly hotter or drier than expected).
    - **Outputs:**
-     - **Full Anomaly Image (Python & modified JS):** GEE asset containing anomaly bands (e.g., `ndvi_Anomaly`, `ST_B10_Anomaly`). Pixel values represent the difference between observed and predicted conditions.
-     - **Hotspot Images (Python & JS):** Derived boolean/masked images showing areas exceeding specific anomaly thresholds (e.g., `TrendAnomaly_STB10_Hotspot_py`, `TrendAnomaly_NDMI_Hotspot_py`).
-   - **Interpretation:** Hotspots indicate areas where recent conditions are unusually conducive to fire compared to the established long-term trend for that location and time of year. For example:
-     - *Thermal Hotspot (`ST_B10_Anomaly > threshold`):* Area is significantly hotter than expected.
-     - *Moisture Hotspot (`ndmi_Anomaly < threshold`):* Area is significantly drier than expected.
+     - **Full Anomaly Image:** GEE asset containing anomaly bands (e.g., `TrendAnomaly_py`, `TrendAnomaly_js`). Pixel values represent the difference between observed and predicted conditions.
+     - **Hotspot Images:** Derived boolean/masked images showing areas exceeding specific anomaly thresholds (e.g., `TrendAnomaly_STB10_Hotspot_py`).
+   - **Interpretation:** Hotspots indicate areas where recent conditions are unusually conducive to fire compared to the established long-term trend for that location and time of year. Best interpreted alongside the vulnerability map from Step 2.
 
 ## Potential Improvements & Next Steps
 Based on the anomaly prediction methodology:
