@@ -1,5 +1,5 @@
 //This is the trend anomaly prediction code
-//Anomaly prediction - uses the outputs from TrendFire code - 14 layers
+//Anomaly prediction - uses the outputs from TrendFire code - inputResampled.tif with 40 bands
 //These layers consist of vegetation indices, burn indices and meterological parameters
 
 //true fire events from VIIRS SNPP 375m active fires
@@ -12,201 +12,16 @@ Map.addLayer(fire13_22,{},'allFirePts',false)
 Map.addLayer(fireMarch2023,{},'2023March fire')
 Map.centerObject(pa,10)
 
-//Mask to filter cloudy pixels and conversion of DN to surface reflectance
-function maskL8sr(image) {
-  // Bit 0 - Fill
-  // Bit 1 - Dilated Cloud
-  // Bit 2 - Cirrus
-  // Bit 3 - Cloud
-  // Bit 4 - Cloud Shadow
-  var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111', 2)).eq(0);
-  var saturationMask = image.select('QA_RADSAT').eq(0);
-
-  // Apply the scaling factors to the appropriate bands.
-  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
-  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
-
-  // Replace the original bands with the scaled ones and apply the masks.
-  return image.addBands(opticalBands, null, true)
-      .addBands(thermalBands, null, true)
-      .updateMask(qaMask)
-      .updateMask(saturationMask);
-}
-
-// Function to compute spectral indices
-var addIndices = function(image) {
-  var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4'])
-    .rename('ndvi');
-
-  var mirbi = image.expression(
-    '(10*swir1) - (9.8*swir2) + 2',{
-    'swir1':image.select('SR_B6'),
-    'swir2':image.select('SR_B7')
-      
-    }).rename('mirbi')
-    
-
-  var ndfi = image.normalizedDifference(['ST_B10', 'SR_B6'])
-    .rename('ndfi');
-
-  var evi = image.expression(
-    '2.5 * ((NIR - RED)/(NIR + 6*RED - 7.5*BLUE + 1))', {
-      'NIR': image.select('SR_B5'),
-      'RED': image.select('SR_B4'),
-      'BLUE': image.select('SR_B2')
-    }).rename('evi');
-
-  var bsi = image.expression(
-      '(( X + Y ) - (A + B)) /(( X + Y ) + (A + B)) ', {
-        'X': image.select('SR_B6'),
-        'Y': image.select('SR_B4'),
-        'A': image.select('SR_B5'),
-        'B': image.select('SR_B2'),
-    }).rename('bsi');
-  var ndmi = image.normalizedDifference(['SR_B5', 'SR_B6'])
-    .rename('ndmi');
-  var nbr = image.normalizedDifference(['SR_B5', 'SR_B7'])
-    .rename('nbr');
-  var nbr2 = image.normalizedDifference(['SR_B6', 'SR_B7'])
-    .rename('nbr2');
-  
-  var msavi = image.expression(
-    '((2 * NIR + 1) - sqrt((2 * NIR + 1) ** 2 - 8 * (NIR - RED))) / 2',
-    {
-      'NIR': image.select('SR_B5'),
-      'RED': image.select('SR_B4')
-      
-    }
-  ).rename('msavi');
-
-  return image
-    .addBands(ndvi)
-    .addBands(mirbi)
-    .addBands(ndfi)
-    .addBands(evi)
-    .addBands(bsi)
-    .addBands(ndmi)
-    .addBands(nbr)
-    .addBands(nbr2)
-    .addBands(msavi);
-};
-
-
-
-
-
-
-//preparing landsat data for time series chart 
-// Time series chart generation data is hashed below.
-var outlierDate = ee.Date('2016-06-22');
-var landsat = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
-                     .filterDate('2013-03-20', '2024-02-28').filterBounds(pa)
-                     .filterMetadata('CLOUD_COVER', 'less_than', 10)
-                     .map(maskL8sr)
-                     .map(function(image) {
-                    return image.clip(pa);
-                  })
-                  .map(addIndices);
-
-
-landsat = landsat
-  .filterDate('2013-03-20', '2024-02-28')
-  .filterBounds(pa)
-  .filter(
-    ee.Filter.or(
-      ee.Filter.date('2013-03-20', outlierDate),  // Keep images before outlier
-      ee.Filter.date(outlierDate.advance(1, 'day'), '2024-02-28') // Keep images after outlier
-    )
-  );
-
-// Function to calculate SMI for the collection
-var addSMI = function(image) {
-  // Access globally defined min/max values
-  var smi = image.select('SR_B7').subtract(swirMin)
-                 .divide(swirMax.subtract(swirMin))
-                 .multiply(-1).add(1).rename('smi');
-  return image.addBands(smi);
-};
-// Calculate SWIR min/max for the entire collection
-var swirStats = (landsat.mean().select('SR_B7')).reduceRegion({
-  reducer: ee.Reducer.minMax(),
-  //selectors: ['SR_B7'],
-  geometry: pa,  // Use AOI
-  scale: 30  
-});
-
-var swirMin = ee.Number(swirStats.get('SR_B7_min'));
-var swirMax = ee.Number(swirStats.get('SR_B7_max'));
-
-landsat = landsat.map(addSMI)
-
-landsat = landsat.select(['ndvi', 'evi', 'mirbi','ndfi','bsi','ndmi','nbr','nbr2','msavi','smi','ST_B10']);
-landsat = landsat.sort('system:time_start');
-
-print(landsat,'landsat')
-
-// Function to extract mean values over the polygon
-var extractTimeSeries = function(image) {
-  var stats = image.reduceRegion({
-    reducer: ee.Reducer.mean(),
-    geometry: pa,  // Use your polygon
-    scale: 30,
-    bestEffort: true,
-    maxPixels: 1e13
-  });
-  
-  // Add the date as a property
-  return ee.Feature(null, stats.set('date', image.date().format('YYYY-MM-dd')));
-};
-
-// Apply the function to the image collection
-var timeSeries = landsat.map(extractTimeSeries);
-
-// Convert to FeatureCollection
-var timeSeriesFC = ee.FeatureCollection(timeSeries);
-
-
-
-// List of indices to plot separately
-var indices = ['ndvi', 'evi', 'mirbi', 'ndfi', 'bsi', 'ndmi', 'nbr', 'nbr2', 'msavi', 'smi', 'ST_B10'];
-
-
-/*
-// Loop through each index and create a separate chart - a chart to view the time series of all indices
-indices.forEach(function(index) {
-  var chart = ui.Chart.feature.byFeature(timeSeriesFC, 'date', [index])
-    .setOptions({
-      title: index.toUpperCase() + ' Over Time',
-      hAxis: {title: 'Date', format: 'YYYY-MM', gridlines: {count: 10}},
-      vAxis: {title: index.toUpperCase() + ' Value'},
-      lineWidth: 2,
-      pointSize: 3
-    });
-
-  print(chart);
-});
-*/
 
 
 //Trend Anomaly prediction begins here-------------------------------------------------------------------
 //--------------------------------------------------------------------------------------------------------
 //The inputs from TrendFire need to be inserted here - first import them as 
-//assets, rename them and put them in the list of indices here
-var images = [ smi,stb10, ndvi,evi,  msavi, mirbi, ndmi,ndfi,nbr, nbr2,bsi];
+//assets, rename them and put them in the list of indices here - here we are using landsat indices to predict forest fire prone hotspot areas
+//the below code is a sample evaluation for this area of interest.
 
-// Start with the first image
-var inputFeat = ee.Image(images[0]);
-
-// Add each subsequent image as bands - image = stack of all indices as bands in the image
-for (var i = 1; i < images.length; i++) {
-  inputFeat = inputFeat.addBands(ee.Image(images[i]));
-}
-
-
-print(inputFeat)
-
-
-
+var inputFeat = inputResampled.select(['smi_Slope','smi_Intercept','ST_B10_Slope','ST_B10_Intercept','evi_Slope','evi_Intercept',
+'msavi_Slope','msavi_Intercept','mirbi_Slope','mirbi_Intercept','nbr_Slope','nbr_Intercept','nbr2_Slope','nbr2_Intercept','bsi_Slope','bsi_Intercept'])
 
 
 
