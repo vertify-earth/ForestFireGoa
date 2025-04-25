@@ -18,7 +18,7 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
 ## Execution Sequence
 ### 1. Trend Calculation (`Trendfire.js`)
    - **Input:** `pa_boundary`
-   - **Output:** 14 trend layers representing long-term changes in vegetation, burn indices, and meteorological parameters - download the trend layer from here - https://www.dropbox.com/scl/fi/ena1qfeqv5ppshluop8kt/inputResampled.tif?rlkey=arefwl3my7nx3z5qpknu88lsx&st=vj8cn3bd&dl=0
+   - **Output:** The output consists of 19 trend layers with 2 bands in each layer representing long-term changes in vegetation, burn indices, and meteorological parameters along with 2 constant layers of DEM and road (Proximity to road in tif format) combined into one tif file with 40 bands. This inputResampled.tif file can be generated using the trendFire.js or can be downloaded from here - https://www.dropbox.com/scl/fi/ena1qfeqv5ppshluop8kt/inputResampled.tif?rlkey=arefwl3my7nx3z5qpknu88lsx&st=vj8cn3bd&dl=0
 
 ### 2. Fire Vulnerability Mapping (`FireVulnerability.js`)
    - **Inputs:**
