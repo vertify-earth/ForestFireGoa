@@ -17,7 +17,7 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
    - **Input:** Study area boundary (e.g., `pa_boundary` GEE asset).
    - **Datasets Used:** Landsat 8 (Vegetation/Burn Indices, LST), CHIRPS Daily (Precipitation), SMAP (Soil Moisture), ERA5-Land Monthly (Relative Humidity).
    - **Method:** Filters datasets by date and boundary, applies masking (e.g., clouds), calculates relevant indices/parameters, and fits a linear trend over time for each pixel using `ee.Reducer.linearFit()`.
-   - **Output:** GEE assets containing the calculated Slope and Intercept bands for each indicator (e.g., `users/.../Trend2023_ndvi`, `users/.../Trend2022_rain_new`). The Python version can optionally export a single merged asset containing all trend bands.
+   - **Output:** The output consists of 19 trend layers with 2 bands in each layer representing long-term changes in vegetation, burn indices, and meteorological parameters along with 2 constant layers of DEM and road (Proximity to road in tif format) combined into one tif file with 40 bands. This inputResampled.tif file can be generated using the trendFire.js or can be downloaded from here - https://www.dropbox.com/scl/fi/ena1qfeqv5ppshluop8kt/inputResampled.tif?rlkey=arefwl3my7nx3z5qpknu88lsx&st=vj8cn3bd&dl=0. The Python version can optionally export a single merged asset containing all trend bands.
 
 ### 2. Fire Vulnerability Mapping (`FireVulnerability.js` / `FireVulnerability.py`)
    - **Goal:** Map the inherent, long-term susceptibility of areas to fire based on environmental factors and historical fire patterns.
@@ -34,7 +34,9 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
      5.  Samples the predictor values from the *resampled* image at the fire/non-fire point locations to create training/validation datasets.
      6.  Trains a Random Forest classifier using the sampled data to learn the relationship between predictor values and fire occurrence/category.
      7.  Applies the trained classifier to the entire *resampled* predictor image.
-   - **Output:** A fire risk classification map (e.g., `FireVulnerability_py` asset) showing predicted vulnerability levels across the study area.
+   - **Output:** 
+     - Fire risk classification map (Low/High fire risk) at 30m resolution
+     - Kappa coefficient for accuracy assessment
 
 ### 3. Fire Prediction using Trend Anomalies (`TrendAnomalyPrediction.js` / `TrendAnomalyPrediction.py`)
    - **Goal:** Identify areas behaving abnormally compared to their long-term trends *just before* a period of interest (e.g., the start of fire season), potentially indicating heightened *near-term* fire risk.
@@ -50,6 +52,7 @@ This project analyzes forest fire vulnerability and predicts potential fire-pron
    - **Outputs:**
      - *Full Anomaly Image:* GEE asset containing all calculated anomaly bands (e.g., `TrendAnomaly_py`). Pixel values represent the difference between observed and predicted conditions.
      - *Hotspot Images:* Derived boolean/masked images showing areas exceeding specific anomaly thresholds (e.g., `TrendAnomaly_STB10_Hotspot_py`).
+     - Anomaly map comparing trend layers with current conditions
    - **Interpretation:** Hotspots indicate areas where recent conditions are unusually conducive to fire compared to that location's historical trend for that time of year. This provides a dynamic, short-term risk indicator, ideally interpreted alongside the longer-term vulnerability map from Step 2.
 
 ## Potential Improvements & Next Steps
