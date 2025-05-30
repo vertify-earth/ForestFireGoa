@@ -48,7 +48,7 @@ def initialize_ee(project_id='ee-crop-health-telangana'): # Use the verified pro
     except Exception as e:
         # Catch other potential errors during initialization
         print(f"An unexpected error occurred during Earth Engine initialization: {e}")
-        raise
+        raise # Ensure execution stops on unexpected error
 
 def get_goa_boundary(asset_id='users/jonasnothnagel/pa_boundary'):
     """
